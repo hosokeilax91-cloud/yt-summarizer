@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: yt-summarizer
+    env: python
+    region: singapore
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    rootDir: backend
+    staticPublishPath: ../frontend/public
+    envVars:
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: NOTION_TOKEN
+        sync: false
+      - key: NOTION_DB_ID
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false

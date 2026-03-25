@@ -1,0 +1,9 @@
+fastapi==0.115.5
+uvicorn[standard]==0.32.1
+anthropic==0.40.0
+youtube-transcript-api==0.6.3
+httpx==0.28.0
+pydantic==2.10.3
+python-dotenv==1.0.1
+openai==1.57.4
+yt-dlp==2024.12.13

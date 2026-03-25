@@ -1,0 +1,517 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>YT Summarizer</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Zen+Kaku+Gothic+New:wght@400;700;900&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #0a0a0f;
+    --surface: #12121a;
+    --surface2: #1a1a26;
+    --border: #2a2a3d;
+    --accent: #7c6aff;
+    --accent2: #ff6a8a;
+    --text: #e8e8f0;
+    --muted: #6b6b85;
+    --success: #4ade80;
+    --radius: 16px;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Zen Kaku Gothic New', sans-serif;
+    min-height: 100vh;
+    padding: 24px 16px 64px;
+  }
+
+  /* Background grain */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='0.04'/%3E%3C/svg%3E");
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  .container {
+    max-width: 760px;
+    margin: 0 auto;
+    position: relative;
+    z-index: 1;
+  }
+
+  header {
+    text-align: center;
+    padding: 48px 0 40px;
+  }
+
+  .logo {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 12px;
+  }
+
+  .logo-icon {
+    width: 40px; height: 40px;
+    background: linear-gradient(135deg, var(--accent), var(--accent2));
+    border-radius: 10px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 20px;
+  }
+
+  h1 {
+    font-size: clamp(22px, 5vw, 28px);
+    font-weight: 900;
+    letter-spacing: -0.5px;
+    background: linear-gradient(135deg, #fff 40%, var(--accent));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+
+  .subtitle {
+    color: var(--muted);
+    font-size: 14px;
+    margin-top: 6px;
+  }
+
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 28px;
+    margin-bottom: 20px;
+  }
+
+  .input-wrap {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+
+  input[type="text"] {
+    flex: 1;
+    min-width: 200px;
+    background: var(--bg);
+    border: 1.5px solid var(--border);
+    border-radius: 10px;
+    color: var(--text);
+    font-size: 14px;
+    font-family: 'JetBrains Mono', monospace;
+    padding: 12px 16px;
+    outline: none;
+    transition: border-color 0.2s;
+  }
+
+  input[type="text"]:focus {
+    border-color: var(--accent);
+  }
+
+  input[type="text"]::placeholder { color: var(--muted); }
+
+  .btn {
+    background: linear-gradient(135deg, var(--accent), #5b4de8);
+    color: #fff;
+    font-family: 'Zen Kaku Gothic New', sans-serif;
+    font-weight: 700;
+    font-size: 15px;
+    border: none;
+    border-radius: 10px;
+    padding: 12px 24px;
+    cursor: pointer;
+    transition: opacity 0.2s, transform 0.1s;
+    white-space: nowrap;
+  }
+  .btn:hover { opacity: 0.9; transform: translateY(-1px); }
+  .btn:active { transform: translateY(0); }
+  .btn:disabled { opacity: 0.4; cursor: not-allowed; transform: none; }
+
+  .toggle-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-top: 16px;
+  }
+
+  .toggle {
+    position: relative;
+    width: 40px; height: 22px;
+  }
+  .toggle input { opacity: 0; width: 0; height: 0; }
+  .slider {
+    position: absolute; inset: 0;
+    background: var(--border);
+    border-radius: 11px;
+    cursor: pointer;
+    transition: background 0.2s;
+  }
+  .slider::before {
+    content: '';
+    position: absolute;
+    width: 16px; height: 16px;
+    left: 3px; top: 3px;
+    background: white;
+    border-radius: 50%;
+    transition: transform 0.2s;
+  }
+  .toggle input:checked + .slider { background: var(--accent); }
+  .toggle input:checked + .slider::before { transform: translateX(18px); }
+
+  .toggle-label { font-size: 13px; color: var(--muted); }
+
+  /* Status */
+  .status {
+    display: none;
+    align-items: center;
+    gap: 12px;
+    padding: 16px 20px;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    margin-bottom: 20px;
+    font-size: 14px;
+  }
+  .status.show { display: flex; }
+
+  .spinner {
+    width: 18px; height: 18px;
+    border: 2px solid var(--border);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+    flex-shrink: 0;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .status-text { color: var(--muted); }
+
+  /* Error */
+  .error-box {
+    display: none;
+    background: rgba(255, 100, 100, 0.08);
+    border: 1px solid rgba(255, 100, 100, 0.3);
+    border-radius: 12px;
+    padding: 16px 20px;
+    margin-bottom: 20px;
+    font-size: 14px;
+    color: #ff8080;
+  }
+  .error-box.show { display: block; }
+
+  /* Result */
+  .result-card {
+    display: none;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+    margin-bottom: 20px;
+  }
+  .result-card.show { display: block; }
+
+  .result-header {
+    padding: 20px 24px;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface2);
+  }
+
+  .result-title {
+    font-size: 16px;
+    font-weight: 700;
+    line-height: 1.4;
+    margin-bottom: 6px;
+  }
+
+  .result-meta {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+    font-size: 12px;
+    color: var(--muted);
+    font-family: 'JetBrains Mono', monospace;
+  }
+
+  .meta-badge {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 3px 8px;
+  }
+
+  .result-body {
+    padding: 24px;
+  }
+
+  .summary-content {
+    font-size: 14px;
+    line-height: 1.8;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+
+  .summary-content h2 {
+    font-size: 15px;
+    font-weight: 700;
+    color: var(--accent);
+    margin: 24px 0 10px;
+    padding-bottom: 6px;
+    border-bottom: 1px solid var(--border);
+  }
+  .summary-content h2:first-child { margin-top: 0; }
+
+  .summary-content h3 {
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--text);
+    margin: 16px 0 6px;
+  }
+
+  .summary-content ul { padding-left: 18px; }
+  .summary-content li { margin-bottom: 4px; }
+
+  .summary-content strong {
+    color: var(--accent2);
+  }
+
+  .summary-content hr {
+    border: none;
+    border-top: 1px solid var(--border);
+    margin: 20px 0;
+  }
+
+  .notion-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 10px 16px;
+    font-size: 13px;
+    color: var(--text);
+    text-decoration: none;
+    margin-top: 20px;
+    transition: border-color 0.2s;
+  }
+  .notion-link:hover { border-color: var(--accent); }
+
+  .tags-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 12px;
+  }
+  .tag {
+    background: rgba(124, 106, 255, 0.12);
+    border: 1px solid rgba(124, 106, 255, 0.3);
+    color: var(--accent);
+    font-size: 11px;
+    border-radius: 6px;
+    padding: 3px 8px;
+  }
+
+  .copy-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    color: var(--muted);
+    font-size: 12px;
+    padding: 6px 12px;
+    cursor: pointer;
+    float: right;
+    margin-top: -4px;
+    transition: all 0.2s;
+  }
+  .copy-btn:hover { border-color: var(--accent); color: var(--accent); }
+
+  @media (max-width: 480px) {
+    .card { padding: 20px; }
+    .result-body { padding: 16px; }
+  }
+</style>
+</head>
+<body>
+<div class="container">
+  <header>
+    <div class="logo">
+      <div class="logo-icon">▶</div>
+      <h1>YT Summarizer</h1>
+    </div>
+    <p class="subtitle">YouTube動画を貼るだけ — AIが即要約してNotionに保存</p>
+  </header>
+
+  <div class="card">
+    <div class="input-wrap">
+      <input type="text" id="urlInput" placeholder="https://www.youtube.com/watch?v=..." />
+      <button class="btn" id="submitBtn" onclick="handleSubmit()">要約する</button>
+    </div>
+    <div class="toggle-row">
+      <label class="toggle">
+        <input type="checkbox" id="notionToggle" checked>
+        <span class="slider"></span>
+      </label>
+      <span class="toggle-label">Notionに自動保存</span>
+    </div>
+  </div>
+
+  <div class="status" id="status">
+    <div class="spinner"></div>
+    <span class="status-text" id="statusText">処理中...</span>
+  </div>
+
+  <div class="error-box" id="errorBox"></div>
+
+  <div class="result-card" id="resultCard">
+    <div class="result-header">
+      <div class="result-title" id="resultTitle"></div>
+      <div class="result-meta" id="resultMeta"></div>
+      <div class="tags-row" id="tagsRow"></div>
+    </div>
+    <div class="result-body">
+      <button class="copy-btn" onclick="copySummary()">📋 コピー</button>
+      <div class="summary-content" id="summaryContent"></div>
+      <div id="notionLinkWrap"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+  const API_BASE = window.location.origin;
+
+  const steps = [
+    "YouTube URLを確認中...",
+    "動画情報を取得中...",
+    "字幕・トランスクリプトを取得中...",
+    "AIが内容を要約中...",
+    "Notionに保存中...",
+  ];
+  let stepTimer = null;
+
+  function setStatus(text) {
+    document.getElementById('statusText').textContent = text;
+  }
+
+  function startStepProgress(saveToNotion) {
+    let i = 0;
+    const filteredSteps = saveToNotion ? steps : steps.slice(0, -1);
+    setStatus(filteredSteps[0]);
+    stepTimer = setInterval(() => {
+      i++;
+      if (i < filteredSteps.length) setStatus(filteredSteps[i]);
+      else clearInterval(stepTimer);
+    }, 4000);
+  }
+
+  function stopStepProgress() {
+    if (stepTimer) clearInterval(stepTimer);
+  }
+
+  function markdownToHtml(md) {
+    return md
+      .replace(/^## (.+)$/gm, '<h2>$1</h2>')
+      .replace(/^### (.+)$/gm, '<h3>$1</h3>')
+      .replace(/^- (.+)$/gm, '<li>$1</li>')
+      .replace(/(<li>.*<\/li>\n?)+/g, m => `<ul>${m}</ul>`)
+      .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+      .replace(/^---$/gm, '<hr>')
+      .replace(/\n{2,}/g, '\n');
+  }
+
+  async function handleSubmit() {
+    const url = document.getElementById('urlInput').value.trim();
+    const saveToNotion = document.getElementById('notionToggle').checked;
+
+    if (!url) { alert('YouTubeのURLを入力してください'); return; }
+
+    // UI reset
+    document.getElementById('errorBox').className = 'error-box';
+    document.getElementById('resultCard').className = 'result-card';
+    document.getElementById('status').className = 'status show';
+    document.getElementById('submitBtn').disabled = true;
+
+    startStepProgress(saveToNotion);
+
+    try {
+      const res = await fetch(`${API_BASE}/summarize`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url, save_to_notion: saveToNotion }),
+      });
+
+      stopStepProgress();
+
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.detail || 'サーバーエラーが発生しました');
+      }
+
+      const data = await res.json();
+      document.getElementById('status').className = 'status';
+
+      // タイトル
+      document.getElementById('resultTitle').textContent = data.title;
+
+      // メタ情報
+      const whisperBadge = data.whisper_used ? '<span class="meta-badge">🎙 Whisper</span>' : '<span class="meta-badge">📝 字幕</span>';
+      document.getElementById('resultMeta').innerHTML =
+        `<span class="meta-badge">📺 ${data.channel}</span>${whisperBadge}`;
+
+      // タグ
+      const tagsRow = document.getElementById('tagsRow');
+      tagsRow.innerHTML = (data.tags || []).map(t => `<span class="tag">${t}</span>`).join('');
+
+      // 要約
+      document.getElementById('summaryContent').innerHTML = markdownToHtml(data.summary);
+
+      // Notionリンク
+      const notionWrap = document.getElementById('notionLinkWrap');
+      if (data.notion_url) {
+        notionWrap.innerHTML = `<a class="notion-link" href="${data.notion_url}" target="_blank">
+          <span>📓</span> Notionで開く
+        </a>`;
+      } else if (data.notion_error) {
+        notionWrap.innerHTML = `<p style="color:var(--muted);font-size:12px;margin-top:12px;">⚠️ Notion保存失敗: ${data.notion_error}</p>`;
+      } else {
+        notionWrap.innerHTML = '';
+      }
+
+      document.getElementById('resultCard').className = 'result-card show';
+
+    } catch (e) {
+      stopStepProgress();
+      document.getElementById('status').className = 'status';
+      const errBox = document.getElementById('errorBox');
+      errBox.textContent = `❌ ${e.message}`;
+      errBox.className = 'error-box show';
+    } finally {
+      document.getElementById('submitBtn').disabled = false;
+    }
+  }
+
+  function copySummary() {
+    const text = document.getElementById('summaryContent').innerText;
+    navigator.clipboard.writeText(text).then(() => {
+      const btn = document.querySelector('.copy-btn');
+      btn.textContent = '✅ コピーしました';
+      setTimeout(() => btn.innerHTML = '📋 コピー', 2000);
+    });
+  }
+
+  // Enterキー対応
+  document.getElementById('urlInput').addEventListener('keydown', e => {
+    if (e.key === 'Enter') handleSubmit();
+  });
+</script>
+</body>
+</html>
