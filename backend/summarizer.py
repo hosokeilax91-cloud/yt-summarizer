@@ -58,6 +58,10 @@ def fetch_transcript(video_id: str) -> tuple[str, str]:
 
     except (NoTranscriptFound, TranscriptsDisabled):
         return None, None
+    except Exception as e:
+        # 429 Too Many Requests などのエラー時もWhisperフォールバックへ
+        print(f"[WARN] 字幕取得失敗（Whisperフォールバックへ）: {e}")
+        return None, None
 
 async def transcribe_with_whisper(video_id: str) -> str:
     """yt-dlpで音声DL → OpenAI Whisper APIで文字起こし"""
