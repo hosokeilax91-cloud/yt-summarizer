@@ -1,11 +1,23 @@
 import os
 import re
 import json
+import html
 import tempfile
 import asyncio
+import httpx
 import anthropic
 
 client = anthropic.AsyncAnthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+
+# Invidious公開インスタンス（YouTube直接アクセスを回避）
+INVIDIOUS_INSTANCES = [
+    "https://vid.puffyan.us",
+    "https://inv.tux.pizza",
+    "https://invidious.fdn.fr",
+    "https://invidious.privacyredirect.com",
+    "https://yewtu.be",
+]
+
 
 def extract_video_id(url: str) -> str:
     patterns = [
@@ -18,112 +30,87 @@ def extract_video_id(url: str) -> str:
     raise ValueError("YouTube URLからVideo IDを取得できませんでした")
 
 
-def get_video_info_and_subtitles(video_id: str) -> dict:
+def parse_xml_captions(xml_text: str) -> str:
+    """YouTube字幕XML（timedtext形式）をプレーンテキストに変換"""
+    texts = re.findall(r"<text[^>]*>([^<]+)</text>", xml_text)
+    if texts:
+        texts = [html.unescape(t).strip() for t in texts if t.strip()]
+        return " ".join(texts)
+    return ""
+
+
+async def fetch_transcript_invidious(video_id: str) -> tuple:
     """
-    yt-dlp で動画情報と字幕を一括取得。
-    youtube_transcript_api よりクラウド環境での信頼性が高い。
+    Invidious API経由でYouTube字幕を取得。
+    YouTubeに直接アクセスしないため、クラウドサーバーでもブロックされにくい。
     """
-    import yt_dlp
-
-    url = f"https://www.youtube.com/watch?v={video_id}"
-    result = {
-        "title": "タイトル不明",
-        "channel": "チャンネル不明",
-        "transcript": None,
-        "lang": None,
-    }
-
-    with tempfile.TemporaryDirectory() as tmpdir:
-        ydl_opts = {
-            "writesubtitles": True,
-            "writeautomaticsub": True,
-            "subtitleslangs": ["ja", "en"],
-            "subtitlesformat": "json3",
-            "skip_download": True,
-            "outtmpl": os.path.join(tmpdir, "video"),
-            "quiet": True,
-            "no_warnings": True,
-            "extractor_args": {"youtube": {"player_client": ["web"]}},
-        }
-
-        try:
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(url, download=False)
-                result["title"] = info.get("title", "タイトル不明")
-                result["channel"] = info.get("uploader", "チャンネル不明")
-
-                # yt-dlp が字幕をファイルに書き出すため、再度ダウンロード
-                ydl.download([url])
-        except Exception as e:
-            print(f"[WARN] yt-dlp extract_info failed: {e}")
-            # タイトルだけ oEmbed で取得を試みる
+    async with httpx.AsyncClient(timeout=15, follow_redirects=True) as http:
+        for instance in INVIDIOUS_INSTANCES:
             try:
-                import urllib.request
-                oembed_url = f"https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v={video_id}&format=json"
-                with urllib.request.urlopen(oembed_url, timeout=10) as r:
-                    data = json.loads(r.read())
-                result["title"] = data.get("title", "タイトル不明")
-                result["channel"] = data.get("author_name", "チャンネル不明")
+                # 字幕一覧を取得
+                resp = await http.get(f"{instance}/api/v1/captions/{video_id}")
+                if resp.status_code != 200:
+                    continue
+
+                captions = resp.json().get("captions", [])
+
+                # 日本語 → 英語の順で取得
+                for lang in ["ja", "en"]:
+                    for cap in captions:
+                        cap_lang = cap.get("language_code", "")
+                        if cap_lang.startswith(lang):
+                            sub_url = cap.get("url", "")
+                            if not sub_url.startswith("http"):
+                                sub_url = f"{instance}{sub_url}"
+
+                            sub_resp = await http.get(sub_url)
+                            if sub_resp.status_code == 200:
+                                text = parse_xml_captions(sub_resp.text)
+                                if text:
+                                    print(f"[INFO] Invidious ({instance}) で字幕取得成功: {lang}")
+                                    return text, lang
+
+            except Exception as e:
+                print(f"[WARN] Invidious {instance} failed: {e}")
+                continue
+
+    return None, None
+
+
+async def fetch_video_info_invidious(video_id: str) -> dict:
+    """Invidious APIで動画情報を取得"""
+    async with httpx.AsyncClient(timeout=15, follow_redirects=True) as http:
+        for instance in INVIDIOUS_INSTANCES:
+            try:
+                resp = await http.get(f"{instance}/api/v1/videos/{video_id}?fields=title,author")
+                if resp.status_code == 200:
+                    data = resp.json()
+                    return {
+                        "title": data.get("title", "タイトル不明"),
+                        "channel": data.get("author", "チャンネル不明"),
+                    }
             except Exception:
-                pass
-            return result
+                continue
 
-        # 字幕ファイルを探して読み取る
-        for lang in ["ja", "en"]:
-            sub_file = os.path.join(tmpdir, f"video.{lang}.json3")
-            if os.path.exists(sub_file):
-                try:
-                    with open(sub_file, "r", encoding="utf-8") as f:
-                        data = json.load(f)
-                    events = data.get("events", [])
-                    texts = []
-                    for event in events:
-                        for seg in event.get("segs", []):
-                            t = seg.get("utf8", "").strip()
-                            if t and t != "\n":
-                                texts.append(t)
-                    if texts:
-                        result["transcript"] = " ".join(texts)
-                        result["lang"] = lang
-                        return result
-                except Exception as e:
-                    print(f"[WARN] json3 parse error for {lang}: {e}")
-                    continue
+    # フォールバック: oEmbed API
+    try:
+        async with httpx.AsyncClient(timeout=10) as http:
+            oembed_url = f"https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v={video_id}&format=json"
+            resp = await http.get(oembed_url)
+            if resp.status_code == 200:
+                data = resp.json()
+                return {
+                    "title": data.get("title", "タイトル不明"),
+                    "channel": data.get("author_name", "チャンネル不明"),
+                }
+    except Exception:
+        pass
 
-        # json3 が無ければ vtt を試す
-        for lang in ["ja", "en"]:
-            sub_file = os.path.join(tmpdir, f"video.{lang}.vtt")
-            if os.path.exists(sub_file):
-                try:
-                    with open(sub_file, "r", encoding="utf-8") as f:
-                        content = f.read()
-                    lines = content.splitlines()
-                    texts = []
-                    for line in lines:
-                        line = line.strip()
-                        if (line and not line.startswith("WEBVTT")
-                            and "-->" not in line
-                            and not line.isdigit()
-                            and not line.startswith("NOTE")):
-                            # HTMLタグを除去
-                            clean = re.sub(r"<[^>]+>", "", line)
-                            if clean.strip():
-                                texts.append(clean.strip())
-                    if texts:
-                        result["transcript"] = " ".join(texts)
-                        result["lang"] = lang
-                        return result
-                except Exception as e:
-                    print(f"[WARN] vtt parse error for {lang}: {e}")
-                    continue
-
-    return result
+    return {"title": "タイトル不明", "channel": "チャンネル不明"}
 
 
 def fetch_transcript_legacy(video_id: str) -> tuple:
-    """
-    レガシー: youtube_transcript_api を使った字幕取得（フォールバック）
-    """
+    """レガシー: youtube_transcript_api を使った字幕取得"""
     try:
         from youtube_transcript_api import YouTubeTranscriptApi
         transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
@@ -173,7 +160,6 @@ async def transcribe_with_whisper(video_id: str) -> str:
         except Exception as e:
             raise RuntimeError(f"音声ダウンロード失敗: {e}")
 
-        # mp3ファイルを探す
         audio_files = [f for f in os.listdir(tmpdir)
                        if f.endswith((".mp3", ".m4a", ".webm", ".opus"))]
         if not audio_files:
@@ -181,7 +167,6 @@ async def transcribe_with_whisper(video_id: str) -> str:
 
         audio_path = os.path.join(tmpdir, audio_files[0])
 
-        # ファイルサイズチェック（Whisper APIの25MB制限）
         file_size = os.path.getsize(audio_path)
         if file_size > 25 * 1024 * 1024:
             raise RuntimeError("音声ファイルが大きすぎます（25MB制限）。短い動画で試してください。")
@@ -228,20 +213,22 @@ SUMMARIZE_PROMPT = """あなたはYouTube動画の内容を分かりやすく要
 async def summarize_video(url: str) -> dict:
     video_id = extract_video_id(url)
 
-    # Step 1: yt-dlp で動画情報＋字幕を一括取得
-    info = get_video_info_and_subtitles(video_id)
-    transcript = info["transcript"]
-    lang = info["lang"]
+    # Step 1: Invidious APIで動画情報を取得
+    info = await fetch_video_info_invidious(video_id)
 
-    # Step 2: yt-dlp で字幕取得できなかった場合 → youtube_transcript_api
+    # Step 2: Invidious APIで字幕を取得（メイン）
+    print(f"[INFO] Step 1: Invidious APIで字幕取得を試行...")
+    transcript, lang = await fetch_transcript_invidious(video_id)
+
+    # Step 3: youtube_transcript_api（フォールバック1）
     if not transcript:
-        print("[INFO] yt-dlp字幕取得失敗 → youtube_transcript_apiを試行")
+        print(f"[INFO] Step 2: youtube_transcript_apiで字幕取得を試行...")
         transcript, lang = fetch_transcript_legacy(video_id)
 
-    # Step 3: それでも取得できない場合 → Whisperフォールバック
+    # Step 4: Whisper音声文字起こし（フォールバック2）
     whisper_used = False
     if not transcript:
-        print("[INFO] 字幕取得失敗 → Whisperフォールバック")
+        print(f"[INFO] Step 3: Whisperで音声文字起こしを試行...")
         if not os.environ.get("OPENAI_API_KEY"):
             raise RuntimeError(
                 "この動画の字幕を取得できませんでした。"
@@ -252,10 +239,10 @@ async def summarize_video(url: str) -> dict:
             whisper_used = True
         except Exception as e:
             raise RuntimeError(
-                f"字幕取得・音声文字起こしの両方に失敗しました: {e}"
+                f"字幕取得・音声文字起こしのすべてに失敗しました: {e}"
             )
 
-    # 長すぎる場合はトリミング（Claude APIの制限対策）
+    # 長すぎる場合はトリミング
     max_chars = 80000
     if len(transcript) > max_chars:
         transcript = transcript[:max_chars] + "\n...(長すぎるため以降省略)"
