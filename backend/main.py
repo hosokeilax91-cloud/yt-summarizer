@@ -36,6 +36,44 @@ def debug_env():
             result[k] = "NOT SET"
     return result
 
+@app.get("/debug-notion")
+async def debug_notion():
+    """Notion接続テスト"""
+    import httpx
+    token = os.environ.get("NOTION_TOKEN", "")
+    db_id = os.environ.get("NOTION_DB_ID", "")
+
+    if not token or not db_id:
+        return {"status": "error", "message": "NOTION_TOKEN or NOTION_DB_ID not set"}
+
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Notion-Version": "2022-06-28",
+    }
+
+    async with httpx.AsyncClient(timeout=30) as client:
+        # データベース情報を取得
+        res = await client.get(
+            f"https://api.notion.com/v1/databases/{db_id}",
+            headers=headers,
+        )
+        if res.status_code == 200:
+            data = res.json()
+            props = list(data.get("properties", {}).keys())
+            return {
+                "status": "ok",
+                "database_title": data.get("title", [{}])[0].get("plain_text", "不明"),
+                "properties": props,
+                "db_id": db_id,
+            }
+        else:
+            return {
+                "status": "error",
+                "code": res.status_code,
+                "message": res.text[:500],
+                "db_id": db_id,
+            }
+
 @app.post("/summarize")
 async def summarize(req: SummarizeRequest):
     try:
@@ -50,6 +88,7 @@ async def summarize(req: SummarizeRequest):
         except Exception as e:
             notion_url = None
             result["notion_error"] = str(e)
+            print(f"[ERROR] Notion保存失敗: {e}")
 
     result["notion_url"] = notion_url
     return result

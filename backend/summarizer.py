@@ -43,7 +43,7 @@ async def fetch_transcript_supadata(video_id: str) -> tuple:
         print("[WARN] SUPADATA_API_KEY が設定されていません")
         return None, None
 
-    async with httpx.AsyncClient(timeout=30) as http:
+    async with httpx.AsyncClient(timeout=60) as http:
         for lang in ["ja", "en"]:
             try:
                 resp = await http.get(
@@ -67,7 +67,7 @@ async def fetch_transcript_supadata(video_id: str) -> tuple:
                             print(f"[INFO] Supadata APIで字幕取得成功: {lang}")
                             return content, lang
                 else:
-                    print(f"[WARN] Supadata API ({lang}): status {resp.status_code}")
+                    print(f"[WARN] Supadata API ({lang}): status {resp.status_code} - {resp.text[:200]}")
             except Exception as e:
                 print(f"[WARN] Supadata API ({lang}) failed: {e}")
                 continue
@@ -167,6 +167,12 @@ async def transcribe_with_whisper(video_id: str) -> str:
 SUMMARIZE_PROMPT = """あなたはYouTube動画の内容を分かりやすく要約する専門家です。
 以下のトランスクリプトを読んで、日本語で構造化された要約を作成してください。
 
+【重要な注意点】
+- トランスクリプトは自動生成された字幕であり、話者の識別情報は含まれていません。
+- 話者が誰であるか断定的に書かないでください。「動画では〜と説明されている」のように書いてください。
+- 複数の話者がいる場合は「出演者が〜」「対談の中で〜」のように一般的に記述してください。
+- 固有名詞や人名は、トランスクリプトに明確に含まれている場合のみ使用してください。
+
 【出力形式】
 必ず以下の形式で出力してください：
 
@@ -216,22 +222,31 @@ async def summarize_video(url: str) -> dict:
         if not os.environ.get("OPENAI_API_KEY"):
             raise RuntimeError(
                 "この動画の字幕を取得できませんでした。"
-                "OPENAI_API_KEYが設定されていないため、音声文字起こしもできません。"
+                "字幕のない動画（ミュージックビデオなど）は要約できません。"
             )
         try:
             transcript = await transcribe_with_whisper(video_id)
             whisper_used = True
         except Exception as e:
             raise RuntimeError(
-                f"字幕取得・音声文字起こしのすべてに失敗しました: {e}"
+                f"この動画は要約できませんでした。字幕がなく、音声の文字起こしにも失敗しました。"
+                f"ミュージックビデオや字幕のない動画は対応できません。（詳細: {e}）"
             )
 
-    # 長すぎる場合はトリミング
-    max_chars = 80000
+    # 字幕が取得できたが内容が短すぎる場合
+    if transcript and len(transcript.strip()) < 50:
+        raise RuntimeError(
+            "この動画の字幕は取得できましたが、内容が短すぎるため要約できません。"
+            "ミュージックビデオや歌詞のみの動画は対応していません。"
+        )
+
+    # 長すぎる場合はトリミング（Claude APIのコンテキストに収まるように）
+    max_chars = 100000
     if len(transcript) > max_chars:
         transcript = transcript[:max_chars] + "\n...(長すぎるため以降省略)"
 
-    # Claude APIで要約
+    # Claude APIで要約（タイムアウト対策で長めに設定）
+    print(f"[INFO] Claude APIで要約中... (トランスクリプト: {len(transcript)}文字)")
     message = await client.messages.create(
         model="claude-sonnet-4-20250514",
         max_tokens=4096,
