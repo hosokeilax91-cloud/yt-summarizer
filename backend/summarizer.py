@@ -9,14 +9,8 @@ import anthropic
 
 client = anthropic.AsyncAnthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
 
-# Invidious公開インスタンス（YouTube直接アクセスを回避）
-INVIDIOUS_INSTANCES = [
-    "https://vid.puffyan.us",
-    "https://inv.tux.pizza",
-    "https://invidious.fdn.fr",
-    "https://invidious.privacyredirect.com",
-    "https://yewtu.be",
-]
+# Supadata API（YouTube字幕取得の専用サービス、無料枠あり）
+SUPADATA_API_URL = "https://api.supadata.ai/v1/youtube/transcript"
 
 
 def extract_video_id(url: str) -> str:
@@ -39,60 +33,50 @@ def parse_xml_captions(xml_text: str) -> str:
     return ""
 
 
-async def fetch_transcript_invidious(video_id: str) -> tuple:
+async def fetch_transcript_supadata(video_id: str) -> tuple:
     """
-    Invidious API経由でYouTube字幕を取得。
-    YouTubeに直接アクセスしないため、クラウドサーバーでもブロックされにくい。
+    Supadata API経由でYouTube字幕を取得。
+    専用の字幕取得サービスのため、クラウドサーバーでも確実に動作する。
     """
-    async with httpx.AsyncClient(timeout=15, follow_redirects=True) as http:
-        for instance in INVIDIOUS_INSTANCES:
+    api_key = os.environ.get("SUPADATA_API_KEY", "")
+    if not api_key:
+        print("[WARN] SUPADATA_API_KEY が設定されていません")
+        return None, None
+
+    async with httpx.AsyncClient(timeout=30) as http:
+        for lang in ["ja", "en"]:
             try:
-                # 字幕一覧を取得
-                resp = await http.get(f"{instance}/api/v1/captions/{video_id}")
-                if resp.status_code != 200:
-                    continue
-
-                captions = resp.json().get("captions", [])
-
-                # 日本語 → 英語の順で取得
-                for lang in ["ja", "en"]:
-                    for cap in captions:
-                        cap_lang = cap.get("language_code", "")
-                        if cap_lang.startswith(lang):
-                            sub_url = cap.get("url", "")
-                            if not sub_url.startswith("http"):
-                                sub_url = f"{instance}{sub_url}"
-
-                            sub_resp = await http.get(sub_url)
-                            if sub_resp.status_code == 200:
-                                text = parse_xml_captions(sub_resp.text)
-                                if text:
-                                    print(f"[INFO] Invidious ({instance}) で字幕取得成功: {lang}")
-                                    return text, lang
-
+                resp = await http.get(
+                    SUPADATA_API_URL,
+                    params={"videoId": video_id, "lang": lang},
+                    headers={"x-api-key": api_key},
+                )
+                if resp.status_code == 200:
+                    data = resp.json()
+                    content = data.get("content")
+                    if content and isinstance(content, list):
+                        text = " ".join(
+                            entry.get("text", "") for entry in content
+                            if entry.get("text")
+                        )
+                        if text.strip():
+                            print(f"[INFO] Supadata APIで字幕取得成功: {lang}")
+                            return text, lang
+                    elif content and isinstance(content, str):
+                        if content.strip():
+                            print(f"[INFO] Supadata APIで字幕取得成功: {lang}")
+                            return content, lang
+                else:
+                    print(f"[WARN] Supadata API ({lang}): status {resp.status_code}")
             except Exception as e:
-                print(f"[WARN] Invidious {instance} failed: {e}")
+                print(f"[WARN] Supadata API ({lang}) failed: {e}")
                 continue
 
     return None, None
 
 
-async def fetch_video_info_invidious(video_id: str) -> dict:
-    """Invidious APIで動画情報を取得"""
-    async with httpx.AsyncClient(timeout=15, follow_redirects=True) as http:
-        for instance in INVIDIOUS_INSTANCES:
-            try:
-                resp = await http.get(f"{instance}/api/v1/videos/{video_id}?fields=title,author")
-                if resp.status_code == 200:
-                    data = resp.json()
-                    return {
-                        "title": data.get("title", "タイトル不明"),
-                        "channel": data.get("author", "チャンネル不明"),
-                    }
-            except Exception:
-                continue
-
-    # フォールバック: oEmbed API
+async def fetch_video_info(video_id: str) -> dict:
+    """oEmbed APIで動画情報を取得（YouTube公式、ブロックされにくい）"""
     try:
         async with httpx.AsyncClient(timeout=10) as http:
             oembed_url = f"https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v={video_id}&format=json"
@@ -213,12 +197,12 @@ SUMMARIZE_PROMPT = """あなたはYouTube動画の内容を分かりやすく要
 async def summarize_video(url: str) -> dict:
     video_id = extract_video_id(url)
 
-    # Step 1: Invidious APIで動画情報を取得
-    info = await fetch_video_info_invidious(video_id)
+    # Step 1: 動画情報を取得（oEmbed API）
+    info = await fetch_video_info(video_id)
 
-    # Step 2: Invidious APIで字幕を取得（メイン）
-    print(f"[INFO] Step 1: Invidious APIで字幕取得を試行...")
-    transcript, lang = await fetch_transcript_invidious(video_id)
+    # Step 2: Supadata APIで字幕を取得（メイン - 最も確実）
+    print(f"[INFO] Step 1: Supadata APIで字幕取得を試行...")
+    transcript, lang = await fetch_transcript_supadata(video_id)
 
     # Step 3: youtube_transcript_api（フォールバック1）
     if not transcript:
