@@ -23,6 +23,19 @@ class SummarizeRequest(BaseModel):
 def health():
     return {"status": "ok"}
 
+@app.get("/debug-env")
+def debug_env():
+    """環境変数の設定状況を確認（値は隠す）"""
+    keys = ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "NOTION_TOKEN", "NOTION_DB_ID", "SUPADATA_API_KEY"]
+    result = {}
+    for k in keys:
+        val = os.environ.get(k, "")
+        if val:
+            result[k] = f"SET (starts with: {val[:15]}..., length: {len(val)})"
+        else:
+            result[k] = "NOT SET"
+    return result
+
 @app.post("/summarize")
 async def summarize(req: SummarizeRequest):
     try:
