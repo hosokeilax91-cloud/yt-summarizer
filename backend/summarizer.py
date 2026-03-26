@@ -233,7 +233,7 @@ async def summarize_video(url: str) -> dict:
 
     # Claude APIで要約
     message = await client.messages.create(
-        model="claude-sonnet-4-5",
+        model="claude-sonnet-4-20250514",
         max_tokens=4096,
         messages=[{
             "role": "user",
