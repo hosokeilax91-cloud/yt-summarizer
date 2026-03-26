@@ -119,24 +119,15 @@ async def create_notion_page(data: dict) -> str:
         "parent": {"database_id": NOTION_DB_ID},
         "icon": {"emoji": "🎬"},
         "properties": {
-            "Name": {
+            "タイトル": {
                 "title": [{"text": {"content": data["title"]}}]
             },
             "URL": {
                 "url": data["url"]
             },
-            "チャンネル": {
+            "著者/チャンネル": {
                 "rich_text": [{"text": {"content": data["channel"]}}]
             },
-            "タグ": {
-                "multi_select": tags_prop
-            },
-            "要約日": {
-                "date": {"start": datetime.now(timezone.utc).isoformat()}
-            },
-            "文字起こし方法": {
-                "select": {"name": "Whisper" if data.get("whisper_used") else "字幕"}
-            }
         },
         "children": first_blocks
     }
