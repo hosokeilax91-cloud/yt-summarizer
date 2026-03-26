@@ -269,12 +269,23 @@ async def summarize_video(url: str) -> dict:
                     break
             break
 
+    # 3行サマリー抽出（「要点」列用）
+    three_line_summary = ""
+    if "## 📌 3行サマリー" in summary:
+        section = summary.split("## 📌 3行サマリー")[1]
+        # 次の見出し（##）までを取得
+        if "## " in section[1:]:
+            section = section[:section.index("## ", 1)]
+        lines_list = [l.strip().lstrip("- ").strip() for l in section.strip().splitlines() if l.strip() and not l.strip().startswith("#")]
+        three_line_summary = "\n".join(lines_list)
+
     return {
         "video_id": video_id,
         "url": url,
         "title": info["title"],
         "channel": info["channel"],
         "summary": summary,
+        "three_line_summary": three_line_summary,
         "tags": tags,
         "whisper_used": whisper_used,
         "transcript_lang": lang if not whisper_used else "whisper",

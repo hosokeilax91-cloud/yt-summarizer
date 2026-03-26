@@ -138,6 +138,12 @@ async def create_notion_page(data: dict) -> str:
     title = data.get("title", "タイトル不明")[:2000]
     channel = data.get("channel", "チャンネル不明")[:2000]
 
+    # 3行サマリー（要点列用）
+    three_line_summary = data.get("three_line_summary", "")[:2000]
+
+    # 現在の日付（JST）
+    now_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
     payload = {
         "parent": {"database_id": NOTION_DB_ID},
         "icon": {"emoji": "🎬"},
@@ -150,6 +156,15 @@ async def create_notion_page(data: dict) -> str:
             },
             "著者/チャンネル": {
                 "rich_text": [{"text": {"content": channel}}]
+            },
+            "要点": {
+                "rich_text": [{"text": {"content": three_line_summary}}]
+            },
+            "読了/視聴日": {
+                "date": {"start": now_date}
+            },
+            "種別": {
+                "select": {"name": "動画"}
             },
         },
         "children": first_blocks
