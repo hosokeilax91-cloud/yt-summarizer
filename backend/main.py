@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 import os
-from summarizer import summarize_video
+from summarizer import summarize_video, check_transcript_available
 from notion_writer import save_to_notion
 
 app = FastAPI()
@@ -73,6 +73,18 @@ async def debug_notion():
                 "message": res.text[:500],
                 "db_id": db_id,
             }
+
+class CheckRequest(BaseModel):
+    url: str
+
+@app.post("/check-transcript")
+async def check_transcript(req: CheckRequest):
+    """字幕の有無をチェック（フロントから確認用）"""
+    try:
+        result = await check_transcript_available(req.url)
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 @app.post("/summarize")
 async def summarize(req: SummarizeRequest):

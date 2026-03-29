@@ -440,6 +440,36 @@
     document.getElementById('status').className = 'status show';
     document.getElementById('submitBtn').disabled = true;
 
+    // Step 0: 字幕の有無をチェック
+    setStatus('字幕の有無を確認中...');
+    try {
+      const checkRes = await fetch(`${API_BASE}/check-transcript`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url }),
+      });
+      const checkData = await checkRes.json();
+
+      if (!checkData.has_transcript) {
+        document.getElementById('status').className = 'status';
+        const proceed = confirm(
+          `「${checkData.title}」\n\n` +
+          'この動画には字幕がありません。\n' +
+          '音声文字起こし（AssemblyAI）を使って要約しますか？\n\n' +
+          '※ 処理に1〜3分かかる場合があります\n' +
+          '※ ミュージックビデオなど音楽主体の動画は正確に要約できません'
+        );
+        if (!proceed) {
+          document.getElementById('submitBtn').disabled = false;
+          return;
+        }
+        document.getElementById('status').className = 'status show';
+      }
+    } catch (e) {
+      // チェック失敗時はそのまま要約を試みる
+      console.warn('transcript check failed:', e);
+    }
+
     startStepProgress(saveToNotion);
 
     try {

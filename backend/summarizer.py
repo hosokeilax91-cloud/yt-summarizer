@@ -155,11 +155,11 @@ async def download_audio_ytdlp(video_id: str, tmpdir: str) -> str:
     return os.path.join(tmpdir, audio_files[0])
 
 
-async def transcribe_with_whisper(video_id: str) -> str:
-    """音声DL → OpenAI Whisper APIで文字起こし（pytubefix優先、yt-dlpフォールバック）"""
-    import openai
-
-    openai_client = openai.AsyncOpenAI(api_key=os.environ.get("OPENAI_API_KEY", ""))
+async def transcribe_with_assemblyai(video_id: str) -> str:
+    """音声DL → AssemblyAI APIで文字起こし（月100時間無料）"""
+    api_key = os.environ.get("ASSEMBLYAI_API_KEY", "")
+    if not api_key:
+        raise RuntimeError("ASSEMBLYAI_API_KEY が設定されていません")
 
     with tempfile.TemporaryDirectory() as tmpdir:
         audio_path = None
@@ -184,16 +184,69 @@ async def transcribe_with_whisper(video_id: str) -> str:
                 )
 
         file_size = os.path.getsize(audio_path)
-        if file_size > 25 * 1024 * 1024:
-            raise RuntimeError("音声ファイルが大きすぎます（25MB制限）。短い動画で試してください。")
+        print(f"[INFO] AssemblyAI で文字起こし中... ({file_size / 1024 / 1024:.1f}MB)")
 
-        print(f"[INFO] Whisper API で文字起こし中... ({file_size / 1024 / 1024:.1f}MB)")
-        with open(audio_path, "rb") as f:
-            transcript = await openai_client.audio.transcriptions.create(
-                model="whisper-1",
-                file=f,
+        headers = {"authorization": api_key}
+
+        async with httpx.AsyncClient(timeout=300) as http:
+            # Step 1: 音声ファイルをアップロード
+            print("[INFO] AssemblyAI: 音声アップロード中...")
+            with open(audio_path, "rb") as f:
+                upload_res = await http.post(
+                    "https://api.assemblyai.com/v2/upload",
+                    headers=headers,
+                    content=f.read(),
+                )
+            if upload_res.status_code != 200:
+                raise RuntimeError(f"AssemblyAI アップロードエラー: {upload_res.status_code}")
+            audio_url = upload_res.json()["upload_url"]
+
+            # Step 2: 文字起こしリクエスト
+            print("[INFO] AssemblyAI: 文字起こしリクエスト送信...")
+            transcript_res = await http.post(
+                "https://api.assemblyai.com/v2/transcript",
+                headers=headers,
+                json={"audio_url": audio_url, "language_detection": True},
             )
-        return transcript.text
+            if transcript_res.status_code != 200:
+                raise RuntimeError(f"AssemblyAI リクエストエラー: {transcript_res.status_code}")
+            transcript_id = transcript_res.json()["id"]
+
+            # Step 3: 結果をポーリング
+            print("[INFO] AssemblyAI: 文字起こし処理中...")
+            while True:
+                poll_res = await http.get(
+                    f"https://api.assemblyai.com/v2/transcript/{transcript_id}",
+                    headers=headers,
+                )
+                poll_data = poll_res.json()
+                status = poll_data["status"]
+
+                if status == "completed":
+                    print("[INFO] AssemblyAI: 文字起こし完了!")
+                    return poll_data["text"]
+                elif status == "error":
+                    raise RuntimeError(f"AssemblyAI エラー: {poll_data.get('error', '不明')}")
+
+                await asyncio.sleep(3)
+
+
+async def check_transcript_available(url: str) -> dict:
+    """字幕があるかどうかチェック（フロントから確認用）"""
+    video_id = extract_video_id(url)
+    info = await fetch_video_info(video_id)
+
+    # Supadata で字幕チェック
+    transcript, lang = await fetch_transcript_supadata(video_id)
+    if transcript:
+        return {"has_transcript": True, "method": "subtitle", "title": info["title"], "channel": info["channel"]}
+
+    # youtube_transcript_api でチェック
+    transcript, lang = fetch_transcript_legacy(video_id)
+    if transcript:
+        return {"has_transcript": True, "method": "subtitle", "title": info["title"], "channel": info["channel"]}
+
+    return {"has_transcript": False, "method": "assemblyai", "title": info["title"], "channel": info["channel"]}
 
 
 SUMMARIZE_PROMPT = """あなたはYouTube動画の内容を分かりやすく要約する専門家です。
@@ -247,22 +300,22 @@ async def summarize_video(url: str) -> dict:
         print(f"[INFO] Step 2: youtube_transcript_apiで字幕取得を試行...")
         transcript, lang = fetch_transcript_legacy(video_id)
 
-    # Step 4: Whisper音声文字起こし（フォールバック2）
+    # Step 4: AssemblyAI音声文字起こし（フォールバック2 - 月100時間無料）
     whisper_used = False
     if not transcript:
-        print(f"[INFO] Step 3: Whisperで音声文字起こしを試行...")
-        if not os.environ.get("OPENAI_API_KEY"):
+        print(f"[INFO] Step 3: AssemblyAIで音声文字起こしを試行...")
+        if not os.environ.get("ASSEMBLYAI_API_KEY"):
             raise RuntimeError(
                 "この動画の字幕を取得できませんでした。"
-                "字幕のない動画（ミュージックビデオなど）は要約できません。"
+                "音声文字起こし用のAPIキーが未設定です。"
             )
         try:
-            transcript = await transcribe_with_whisper(video_id)
+            transcript = await transcribe_with_assemblyai(video_id)
             whisper_used = True
         except Exception as e:
             raise RuntimeError(
                 f"この動画は要約できませんでした。字幕がなく、音声の文字起こしにも失敗しました。"
-                f"ミュージックビデオや字幕のない動画は対応できません。（詳細: {e}）"
+                f"ミュージックビデオなど音声が主に音楽の動画は対応できません。（詳細: {e}）"
             )
 
     # 字幕が取得できたが内容が短すぎる場合
