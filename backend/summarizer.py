@@ -201,15 +201,19 @@ async def transcribe_with_assemblyai(video_id: str) -> str:
                 raise RuntimeError(f"AssemblyAI アップロードエラー: {upload_res.status_code}")
             audio_url = upload_res.json()["upload_url"]
 
-            # Step 2: 文字起こしリクエスト
+            # Step 2: 文字起こしリクエスト（speech_models パラメータ必須）
             print("[INFO] AssemblyAI: 文字起こしリクエスト送信...")
             transcript_res = await http.post(
                 "https://api.assemblyai.com/v2/transcript",
-                headers=headers,
-                json={"audio_url": audio_url, "language_detection": True},
+                headers={**headers, "content-type": "application/json"},
+                json={
+                    "audio_url": audio_url,
+                    "speech_models": ["universal-2"],
+                    "language_detection": True,
+                },
             )
             if transcript_res.status_code != 200:
-                raise RuntimeError(f"AssemblyAI リクエストエラー: {transcript_res.status_code}")
+                raise RuntimeError(f"AssemblyAI リクエストエラー: {transcript_res.status_code} {transcript_res.text[:200]}")
             transcript_id = transcript_res.json()["id"]
 
             # Step 3: 結果をポーリング
@@ -223,8 +227,14 @@ async def transcribe_with_assemblyai(video_id: str) -> str:
                 status = poll_data["status"]
 
                 if status == "completed":
-                    print("[INFO] AssemblyAI: 文字起こし完了!")
-                    return poll_data["text"]
+                    text = poll_data.get("text") or ""
+                    if not text.strip():
+                        raise RuntimeError(
+                            "音声の文字起こし結果が空でした。"
+                            "この動画はBGMのみ、または音声が少ないため要約できません。"
+                        )
+                    print(f"[INFO] AssemblyAI: 文字起こし完了! ({len(text)}文字)")
+                    return text
                 elif status == "error":
                     raise RuntimeError(f"AssemblyAI エラー: {poll_data.get('error', '不明')}")
 

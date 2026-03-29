@@ -7,4 +7,4 @@ pydantic==2.10.3
 python-dotenv==1.0.1
 openai==1.57.4
 yt-dlp==2024.12.13
-pytubefix==8.12.1
+pytubefix>=10.0
