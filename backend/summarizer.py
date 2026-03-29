@@ -117,49 +117,81 @@ def fetch_transcript_legacy(video_id: str) -> tuple:
         return None, None
 
 
-async def transcribe_with_whisper(video_id: str) -> str:
-    """yt-dlpで音声DL → OpenAI Whisper APIで文字起こし"""
+async def download_audio_pytubefix(video_id: str, tmpdir: str) -> str:
+    """pytubefix で音声をダウンロード（クラウドサーバー対応）"""
+    from pytubefix import YouTube
+
+    url = f"https://www.youtube.com/watch?v={video_id}"
+    yt = YouTube(url)
+    stream = yt.streams.filter(only_audio=True).order_by("abr").first()
+    if not stream:
+        raise RuntimeError("音声ストリームが見つかりません")
+
+    audio_path = stream.download(output_path=tmpdir, filename="audio")
+    print(f"[INFO] pytubefix: 音声ダウンロード完了 ({os.path.getsize(audio_path) / 1024 / 1024:.1f}MB)")
+    return audio_path
+
+
+async def download_audio_ytdlp(video_id: str, tmpdir: str) -> str:
+    """yt-dlp で音声をダウンロード（フォールバック）"""
     import yt_dlp
+
+    ydl_opts = {
+        "format": "bestaudio[ext=m4a]/bestaudio/best",
+        "outtmpl": os.path.join(tmpdir, "audio.%(ext)s"),
+        "quiet": True,
+        "no_warnings": True,
+    }
+    url = f"https://www.youtube.com/watch?v={video_id}"
+
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        ydl.download([url])
+
+    audio_files = [f for f in os.listdir(tmpdir)
+                   if f.endswith((".mp3", ".m4a", ".webm", ".opus", ".mp4"))]
+    if not audio_files:
+        raise RuntimeError("音声ファイルのダウンロードに失敗しました")
+
+    return os.path.join(tmpdir, audio_files[0])
+
+
+async def transcribe_with_whisper(video_id: str) -> str:
+    """音声DL → OpenAI Whisper APIで文字起こし（pytubefix優先、yt-dlpフォールバック）"""
     import openai
 
     openai_client = openai.AsyncOpenAI(api_key=os.environ.get("OPENAI_API_KEY", ""))
 
     with tempfile.TemporaryDirectory() as tmpdir:
-        ydl_opts = {
-            "format": "bestaudio[ext=m4a]/bestaudio/best",
-            "outtmpl": os.path.join(tmpdir, "audio.%(ext)s"),
-            "postprocessors": [{
-                "key": "FFmpegExtractAudio",
-                "preferredcodec": "mp3",
-                "preferredquality": "64",
-            }],
-            "quiet": True,
-            "no_warnings": True,
-        }
-        url = f"https://www.youtube.com/watch?v={video_id}"
+        audio_path = None
 
+        # 方法1: pytubefix（クラウドサーバーで動作しやすい）
         try:
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                ydl.download([url])
+            print("[INFO] pytubefix で音声ダウンロード試行...")
+            audio_path = await download_audio_pytubefix(video_id, tmpdir)
         except Exception as e:
-            raise RuntimeError(f"音声ダウンロード失敗: {e}")
+            print(f"[WARN] pytubefix 失敗: {e}")
 
-        audio_files = [f for f in os.listdir(tmpdir)
-                       if f.endswith((".mp3", ".m4a", ".webm", ".opus"))]
-        if not audio_files:
-            raise RuntimeError("音声ファイルのダウンロードに失敗しました")
-
-        audio_path = os.path.join(tmpdir, audio_files[0])
+        # 方法2: yt-dlp（フォールバック）
+        if not audio_path:
+            try:
+                print("[INFO] yt-dlp で音声ダウンロード試行...")
+                audio_path = await download_audio_ytdlp(video_id, tmpdir)
+            except Exception as e:
+                print(f"[WARN] yt-dlp 失敗: {e}")
+                raise RuntimeError(
+                    "この動画の音声をダウンロードできませんでした。"
+                    "字幕がなく、音声取得もブロックされています。"
+                )
 
         file_size = os.path.getsize(audio_path)
         if file_size > 25 * 1024 * 1024:
             raise RuntimeError("音声ファイルが大きすぎます（25MB制限）。短い動画で試してください。")
 
+        print(f"[INFO] Whisper API で文字起こし中... ({file_size / 1024 / 1024:.1f}MB)")
         with open(audio_path, "rb") as f:
             transcript = await openai_client.audio.transcriptions.create(
                 model="whisper-1",
                 file=f,
-                language="ja",
             )
         return transcript.text
 
